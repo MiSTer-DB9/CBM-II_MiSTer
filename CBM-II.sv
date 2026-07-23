@@ -509,12 +509,12 @@ hps_io #(.CONF_STR(CONF_STR), .VDNUM(NDU), .BLKSZ(1)) hps_io
 );
 
 wire load_rom      = ioctl_index[5:0] < 7;
-wire load_rom_p500 = ioctl_index == 1 || ioctl_index == {2'd0, 6'd0};
-wire load_rom_b6x0 = ioctl_index == 2 || ioctl_index == {2'd1, 6'd0};
-wire load_rom_b7x0 = ioctl_index == 3 || ioctl_index == {2'd2, 6'd0};
-wire load_rom_2000 = ioctl_index == 4;
-wire load_rom_4000 = ioctl_index == 5;
-wire load_rom_6000 = ioctl_index == 6;
+wire load_rom_p500 = ioctl_index[5:0] == 1 || ioctl_index == {2'd0, 6'd0};
+wire load_rom_b6x0 = ioctl_index[5:0] == 2 || ioctl_index == {2'd1, 6'd0};
+wire load_rom_b7x0 = ioctl_index[5:0] == 3 || ioctl_index == {2'd2, 6'd0};
+wire load_rom_2000 = ioctl_index[5:0] == 4;
+wire load_rom_4000 = ioctl_index[5:0] == 5;
+wire load_rom_6000 = ioctl_index[5:0] == 6;
 // wire load_drv_4040 = ioctl_index == 7;
 // wire load_drv_8250 = ioctl_index == 8;
 wire load_prg      = ioctl_index == 9;
