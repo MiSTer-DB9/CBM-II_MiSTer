@@ -588,18 +588,22 @@ always @(posedge clk_sys) begin
 
 	if (ioctl_wr && !erasing && !force_erase) begin
 		if (load_rom_2000) begin
-			extbankrom[0] <= 1;
-			if (ioctl_addr == 0)
-				ioctl_load_addr <= 25'h103_2000;
-			if (ioctl_addr < 'h2000)
+			// Allow a combined image to fill $2000-$7FFF.
+			if (ioctl_addr < 'h6000) begin
+				extbankrom[ioctl_addr[14:13]] <= 1;
+				if (ioctl_addr == 0)
+					ioctl_load_addr <= 25'h103_2000;
 				ioctl_req_wr <= 1;
+			end
 		end
 		else if (load_rom_4000) begin
-			extbankrom[1] <= 1;
-			if (ioctl_addr == 0)
-				ioctl_load_addr <= 25'h103_4000;
-			if (ioctl_addr < 'h2000)
+			// Allow a combined image to fill $4000-$7FFF.
+			if (ioctl_addr < 'h4000) begin
+				extbankrom[ioctl_addr[13] ? 2 : 1] <= 1;
+				if (ioctl_addr == 0)
+					ioctl_load_addr <= 25'h103_4000;
 				ioctl_req_wr <= 1;
+			end
 		end
 		else if (load_rom_6000) begin
 			extbankrom[2] <= 1;
