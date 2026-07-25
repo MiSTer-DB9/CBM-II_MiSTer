@@ -277,14 +277,18 @@ localparam CONF_STR = {
 	"V,v",`BUILD_DATE
 };
 
-wire pll_locked;
+(* keep = "true" *) wire pll_locked;
 wire clk_sys;
 wire clk_vid;
 wire clk_sdr;
 
+wire pll_reset;
+wire pll_cfg_reset;
+
 pll pll
 (
 	.refclk(CLK_50M),
+	.rst(pll_reset),
 	.outclk_0(clk_sdr),
 	.outclk_1(clk_vid),
 	.outclk_2(clk_sys),
@@ -296,14 +300,14 @@ pll pll
 wire [63:0] reconfig_to_pll;
 wire [63:0] reconfig_from_pll;
 wire        cfg_waitrequest;
-reg         cfg_write;
-reg   [5:0] cfg_address;
-reg  [31:0] cfg_data;
+wire        cfg_write;
+wire  [5:0] cfg_address;
+wire [31:0] cfg_data;
 
 pll_cfg pll_cfg
 (
 	.mgmt_clk(CLK_50M),
-	.mgmt_reset(0),
+	.mgmt_reset(pll_cfg_reset),
 	.mgmt_waitrequest(cfg_waitrequest),
 	.mgmt_read(0),
 	.mgmt_readdata(),
@@ -314,64 +318,336 @@ pll_cfg pll_cfg
 	.reconfig_from_pll(reconfig_from_pll)
 );
 
-wire [31:0] CLK = model ? 36_000_000
-					 : ntsc  ? 32_727_266
-					 :         31_527_954;
+// Requested menu configuration is synchronized into the stable 50 MHz
+// reference domain. Business systems have a single PLL configuration, so
+// NTSC is normalized away for that model.
+reg model_req_50d = 0, model_req_50 = 0;
+reg ntsc_req_50d = 0, ntsc_req_50 = 0;
+always @(posedge CLK_50M) begin
+	model_req_50d <= model_requested;
+	model_req_50 <= model_req_50d;
+	ntsc_req_50d <= ntsc_requested;
+	ntsc_req_50 <= ntsc_req_50d;
+end
+
+wire normalized_ntsc_req_50 = ntsc_req_50 & ~model_req_50;
+
+// model_active changes in the emulated system domain only after the old frame
+// is frozen and the machine has entered transition reset.
+reg model_command_50 = 0;
+reg ntsc_command_50 = 0;
+reg model_command_toggle_50 = 0;
+reg model_command_50d = 0, model_command_sys = 0;
+reg ntsc_command_50d = 0, ntsc_command_sys = 0;
+reg model_toggle_sysd = 0, model_toggle_sys = 0;
+reg model_ack_toggle_sys = 0;
+reg model_active = 0;
+reg ntsc_pll_active = 0;
+
+always @(posedge clk_sys) begin
+	model_command_50d <= model_command_50;
+	model_command_sys <= model_command_50d;
+	ntsc_command_50d <= ntsc_command_50;
+	ntsc_command_sys <= ntsc_command_50d;
+	model_toggle_sysd <= model_command_toggle_50;
+	model_toggle_sys <= model_toggle_sysd;
+
+	if (model_toggle_sys != model_ack_toggle_sys) begin
+		model_active <= model_command_sys;
+		ntsc_pll_active <= ntsc_command_sys;
+		model_ack_toggle_sys <= model_toggle_sys;
+	end
+end
+
+// Business systems retain their model-specific NTSC flag, but it does not
+// select a different PLL configuration. Professional video uses the applied
+// frame-synchronous TV-system value.
+wire ntsc_active = model_active ? ntsc_requested : ntsc_pll_active;
+
+reg model_ack_50d = 0, model_ack_50 = 0;
+always @(posedge CLK_50M) begin
+	model_ack_50d <= model_ack_toggle_sys;
+	model_ack_50 <= model_ack_50d;
+end
+
+wire pll_manager_busy;
+wire pll_manager_done;
+wire pll_fault_latched;
+wire [7:0] pll_recovery_count;
+reg pll_manager_request = 0;
+reg pll_target_model = 0;
+reg pll_target_ntsc = 0;
+
+pll_reconfig_manager pll_manager
+(
+	.clk_50(CLK_50M),
+	.reset(RESET),
+	.request(pll_manager_request),
+	.target_model(pll_target_model),
+	.target_ntsc(pll_target_ntsc),
+	.pll_locked(pll_locked),
+	.cfg_waitrequest(cfg_waitrequest),
+	.cfg_write(cfg_write),
+	.cfg_address(cfg_address),
+	.cfg_writedata(cfg_data),
+	.pll_reset(pll_reset),
+	.cfg_reset(pll_cfg_reset),
+	.busy(pll_manager_busy),
+	.done(pll_manager_done),
+	.fault_latched(pll_fault_latched),
+	.recovery_count(pll_recovery_count)
+);
+
+// The transition freeze is changed only at a frame edge. The emergency path
+// is asynchronous by design: when lock is already lost there may be no frame
+// edge left on which to freeze the scaler.
+reg transition_freeze_request_50 = 0;
+reg transition_freeze_req_vd = 0, transition_freeze_req_v = 0;
+reg transition_freeze = 0;
+reg transition_vsync_d = 0;
+
+always @(posedge clk_vid) begin
+	transition_freeze_req_vd <= transition_freeze_request_50;
+	transition_freeze_req_v <= transition_freeze_req_vd;
+	transition_vsync_d <= vsync_out;
+
+	if (!transition_vsync_d && vsync_out)
+		transition_freeze <= transition_freeze_req_v;
+end
+
+reg transition_freeze_50d = 0, transition_freeze_50 = 0;
+reg selected_vsync_50d = 0, selected_vsync_50 = 0, selected_vsync_50q = 0;
+always @(posedge CLK_50M) begin
+	transition_freeze_50d <= transition_freeze;
+	transition_freeze_50 <= transition_freeze_50d;
+	selected_vsync_50d <= vsync_out;
+	selected_vsync_50 <= selected_vsync_50d;
+	selected_vsync_50q <= selected_vsync_50;
+end
+
+wire selected_vsync_rise_50 = selected_vsync_50 & ~selected_vsync_50q;
+
+localparam [3:0]
+	TR_IDLE          = 4'd0,
+	TR_WAIT_FREEZE   = 4'd1,
+	TR_RESET_HOLD    = 4'd2,
+	TR_WAIT_MODEL    = 4'd3,
+	TR_WAIT_PLL      = 4'd4,
+	TR_WAIT_VIDEO    = 4'd5,
+	TR_RELEASE       = 4'd6;
+
+(* keep = "true" *) reg [3:0] transition_state = TR_IDLE;
+reg transition_reset_50 = 0;
+reg emergency_pll_freeze = 0;
+reg transition_target_model = 0;
+reg transition_target_ntsc = 0;
+reg applied_model_50 = 0;
+reg applied_ntsc_50 = 0;
+reg model_change_needed_50 = 0;
+integer transition_counter = 0;
+reg [1:0] new_frame_count = 0;
+
+wire requested_config_changed =
+	(model_req_50 != applied_model_50) ||
+	(normalized_ntsc_req_50 != applied_ntsc_50);
+
+wire transition_active = transition_state != TR_IDLE;
 
 always @(posedge CLK_50M) begin
-	reg ntscd = 0, ntscd2 = 0;
-	reg modeld = 0, modeld2 = 0;
-	reg [3:0] state = 0;
-	reg ntsc_r, model_r;
+	pll_manager_request <= 0;
 
-	ntscd <= ntsc;
-	ntscd2 <= ntscd;
-	if(ntscd2 == ntscd && ntscd2 != ntsc_r) begin
-		if (!model_r) state <= 1;
-		ntsc_r <= ntscd2;
+	if (RESET) begin
+		transition_state <= TR_IDLE;
+		transition_freeze_request_50 <= 0;
+		transition_reset_50 <= 0;
+		emergency_pll_freeze <= 0;
+		transition_target_model <= 0;
+		transition_target_ntsc <= 0;
+		applied_model_50 <= 0;
+		applied_ntsc_50 <= 0;
+		model_command_50 <= 0;
+		ntsc_command_50 <= 0;
+		model_command_toggle_50 <= 0;
+		model_change_needed_50 <= 0;
+		pll_target_model <= 0;
+		pll_target_ntsc <= 0;
+		transition_counter <= 0;
+		new_frame_count <= 0;
 	end
+	else begin
+		case (transition_state)
+			TR_IDLE: begin
+				transition_reset_50 <= 0;
+				transition_counter <= 0;
+				new_frame_count <= 0;
 
-	modeld <= model;
-	modeld2 <= modeld;
-	if(modeld2 == modeld && modeld2 != model_r) begin
-		state <= 1;
-		model_r <= modeld2;
-	end
+				if (pll_manager_busy || !pll_locked) begin
+					// Startup or an unexpected loss of lock has no reliable
+					// old-frame boundary. Freeze immediately and let the PLL
+					// manager recover its last configuration.
+					transition_target_model <= applied_model_50;
+					transition_target_ntsc <= applied_ntsc_50;
+					transition_freeze_request_50 <= 1;
+					emergency_pll_freeze <= 1;
+					transition_reset_50 <= 1;
+					transition_state <= TR_WAIT_PLL;
+				end
+				else if (requested_config_changed) begin
+					transition_target_model <= model_req_50;
+					transition_target_ntsc <= normalized_ntsc_req_50;
+					transition_freeze_request_50 <= 1;
+					transition_state <= TR_WAIT_FREEZE;
+				end
+			end
 
-	cfg_write <= 0;
-	if(!cfg_waitrequest) begin
-		if(state) state<=state+1'd1;
-		case(state)
-			1: begin
-					cfg_address <= 0;
-					cfg_data <= 0;
-					cfg_write <= 1;
+			TR_WAIT_FREEZE: begin
+				transition_target_model <= model_req_50;
+				transition_target_ntsc <= normalized_ntsc_req_50;
+				transition_counter <= transition_counter + 1;
+
+				if (transition_freeze_50 || !pll_locked ||
+				    transition_counter >= 5_000_000 - 1) begin
+					if (!transition_freeze_50) emergency_pll_freeze <= 1;
+					transition_reset_50 <= 1;
+					transition_counter <= 0;
+					transition_state <= TR_RESET_HOLD;
 				end
-			3: begin
-					cfg_address <= 5;
-					cfg_data <= model_r ? 'h40404 : 'h60504;
-					cfg_write <= 1;
+			end
+
+			TR_RESET_HOLD: begin
+				transition_counter <= transition_counter + 1;
+
+				if (!transition_counter) begin
+					// Place the data bit first and leave it stable for the
+					// entire reset hold before sending the CDC toggle.
+					model_change_needed_50 <=
+						(transition_target_model != model_command_50) ||
+						(transition_target_ntsc != ntsc_command_50);
+					model_command_50 <= transition_target_model;
+					ntsc_command_50 <= transition_target_ntsc;
 				end
-			5: begin
-					cfg_address <= 5;
-					cfg_data <= model_r ? 'h80808 : 'h80909;
-					cfg_write <= 1;
+
+				if (transition_counter >= 500 - 1) begin
+					transition_counter <= 0;
+					if (model_change_needed_50)
+						model_command_toggle_50 <= ~model_command_toggle_50;
+					transition_state <= TR_WAIT_MODEL;
 				end
-			7: begin
-					cfg_address <= 7;
-					cfg_data <= model_r ? 2233382994 : (ntsc_r ? 3357876127 : 1503512573);
-					cfg_write <= 1;
+			end
+
+			TR_WAIT_MODEL: begin
+				if ((model_ack_50 == model_command_toggle_50) &&
+				    !pll_manager_busy) begin
+					pll_target_model <= transition_target_model;
+					pll_target_ntsc <= transition_target_ntsc;
+					pll_manager_request <= 1;
+					transition_state <= TR_WAIT_PLL;
 				end
-			9: begin
-					cfg_address <= 2;
-					cfg_data <= 0;
-					cfg_write <= 1;
+			end
+
+			TR_WAIT_PLL: begin
+				if (!pll_locked) emergency_pll_freeze <= 1;
+
+				if (pll_manager_done && !pll_manager_busy && pll_locked) begin
+					applied_model_50 <= transition_target_model;
+					applied_ntsc_50 <= transition_target_ntsc;
+					transition_reset_50 <= 0;
+					transition_counter <= 0;
+					new_frame_count <= 0;
+					transition_state <= TR_WAIT_VIDEO;
 				end
+			end
+
+			TR_WAIT_VIDEO: begin
+				transition_counter <= transition_counter + 1;
+
+				if (selected_vsync_rise_50) begin
+					if (new_frame_count == 1) begin
+						new_frame_count <= 0;
+						transition_counter <= 0;
+
+						if ((model_req_50 != transition_target_model) ||
+						    (normalized_ntsc_req_50 != transition_target_ntsc)) begin
+							// Coalesce rapid menu changes without exposing an
+							// intermediate model to the scaler.
+							transition_target_model <= model_req_50;
+							transition_target_ntsc <= normalized_ntsc_req_50;
+							transition_reset_50 <= 1;
+							transition_state <= TR_RESET_HOLD;
+						end
+						else begin
+							transition_freeze_request_50 <= 0;
+							transition_state <= TR_RELEASE;
+						end
+					end
+					else begin
+						new_frame_count <= new_frame_count + 1'd1;
+					end
+				end
+				else if (transition_counter >= 25_000_000 - 1) begin
+					// Locked but no usable video: retain the frozen frame and
+					// re-run the complete model/PLL transition.
+					transition_counter <= 0;
+					transition_reset_50 <= 1;
+					emergency_pll_freeze <= 1;
+					transition_state <= TR_RESET_HOLD;
+				end
+			end
+
+			default: begin // TR_RELEASE
+				if (pll_manager_busy || !pll_locked) begin
+					transition_target_model <= applied_model_50;
+					transition_target_ntsc <= applied_ntsc_50;
+					transition_freeze_request_50 <= 1;
+					emergency_pll_freeze <= 1;
+					transition_reset_50 <= 1;
+					transition_state <= TR_WAIT_PLL;
+				end
+				else if ((model_req_50 != applied_model_50) ||
+				    (normalized_ntsc_req_50 != applied_ntsc_50)) begin
+					transition_target_model <= model_req_50;
+					transition_target_ntsc <= normalized_ntsc_req_50;
+					transition_freeze_request_50 <= 1;
+					transition_reset_50 <= 1;
+					transition_counter <= 0;
+					transition_state <= TR_RESET_HOLD;
+				end
+				else if (!transition_freeze_50) begin
+					emergency_pll_freeze <= 0;
+					transition_state <= TR_IDLE;
+				end
+			end
 		endcase
 	end
 end
 
-reg reset_n;
+wire [31:0] CLK = model_active ? 36_000_000
+					 : ntsc_active  ? 32_727_266
+					 :                31_527_954;
+
+// Synchronous reset release in each reconfigured clock domain. Assertion is
+// given a 10 us head start by the transition FSM before any PLL write.
+reg [1:0] transition_reset_sys = 0;
+reg [1:0] transition_reset_vid = 0;
+always @(posedge clk_sys) begin
+	if (transition_reset_50 || !pll_locked)
+		transition_reset_sys <= 2'b11;
+	else
+		transition_reset_sys <= {transition_reset_sys[0], 1'b0};
+end
+
+always @(posedge clk_vid) begin
+	if (transition_reset_50 || !pll_locked)
+		transition_reset_vid <= 2'b11;
+	else
+		transition_reset_vid <= {transition_reset_vid[0], 1'b0};
+end
+
+wire video_path_reset_sys = |transition_reset_sys;
+wire video_path_reset_vid = |transition_reset_vid;
+
+reg base_reset_n;
+wire reset_n = base_reset_n & ~video_path_reset_sys;
 reg cancel_erase;
 reg reset_wait = 0;
 always @(posedge clk_sys) begin
@@ -379,12 +655,18 @@ always @(posedge clk_sys) begin
 	reg [8:0] cfg_r;
 	reg [1:0] do_erase = 2; // 0 - no, 1 - only sram seg 15 bank0+vidram, 2 - all ram
 
-	cfg_r <= status[10:2];
+	// Preserve the old machine long enough to freeze it on a frame edge.
+	// Once model_active catches up, consume the complete configuration change
+	// and perform the same RAM clearing/reset sequence as before.
+	if (model_requested == model_active)
+		cfg_r <= status[10:2];
 
-	reset_n <= !reset_counter;
+	base_reset_n <= !reset_counter;
 	cancel_erase <= reset_counter > 100;
 
-	if (RESET || (cfg_r != status[10:2]) || status[0] || !pll_locked) begin
+	if (RESET ||
+	    ((model_requested == model_active) && (cfg_r != status[10:2])) ||
+	    status[0] || !pll_locked) begin
 		do_erase <= (status[14] && !RESET) ? 2'd1 : 2'd2;
 		reset_counter <= 100000;
 	end
@@ -440,7 +722,7 @@ wire           sftlk_sense;
 
 wire    [21:0] gamma_bus;
 
-wire           joy_en = ~model | (cfgcust & status[37]);
+wire           joy_en = ~model_active | (cfgcust & status[37]);
 wire    [15:0] joyA, joyB, joyC, joyD;
 wire     [7:0] pd1, pd2,pd3, pd4;
 
@@ -464,7 +746,7 @@ hps_io #(.CONF_STR(CONF_STR), .VDNUM(NDU), .BLKSZ(1)) hps_io
 		/* 4 */ 1'b0,
 		/* 3 */ |vcrop,
 		/* 2 */ model7x0,
-		/* 1 */ model,
+		/* 1 */ model_active,
 		/* 0 */ cfgcust
 	}),
 	.buttons(buttons),
@@ -527,11 +809,11 @@ wire       modelx10 = status[4:2] == 0 || status[4:2] == 1 || status[4:2] == 3;
 // wire    modelx20 = status[4:2] == 2 || status[4:2] == 4;
 wire       cfgcust  = status[4:2] == 5;
 
-wire       model   = cfgcust ? |status[6:5] : ~model500;          // 0=P, 1=B
+wire       model_requested = cfgcust ? |status[6:5] : ~model500;  // 0=P, 1=B
 wire       profile = cfgcust ? status[6]    : model7x0;           // 0=P/L, 1=H
 wire [1:0] ramsize = cfgcust ? status[10:9] : {1'b0, ~modelx10};  // 0=128k, 1=256k, 2=896k
-wire       cpu2MHz = cfgcust ? status[11]   : model;              // 0=1MHz, 1=2MHz
-wire       ntsc    = status[12] | model7x0;                       // 0=PAL/50, 1=NTSC/60
+wire       cpu2MHz = cfgcust ? status[11]   : model_active;       // 0=1MHz, 1=2MHz
+wire       ntsc_requested = status[12] | model7x0;                // 0=PAL/50, 1=NTSC/60
 wire       newVic  = status[25];                                  // 0=early, 1=modern
 
 // ========================================================================
@@ -642,7 +924,7 @@ always @(posedge clk_sys) begin
 				inj_end[7:0]          <= status[24] ? ioctl_data : 8'h03;
 			end
 			else if (ioctl_addr == 1) begin
-				ioctl_load_addr[24:16]<= model ? 9'd1 : 9'd0;
+				ioctl_load_addr[24:16]<= model_active ? 9'd1 : 9'd0;
 				ioctl_load_addr[15:8] <= status[24] ? ioctl_data : 8'h00;
 				inj_start[15:8]       <= status[24] ? ioctl_data : 8'h00;
 				inj_end[15:8]         <= status[24] ? ioctl_data : 8'h00;
@@ -679,7 +961,7 @@ always @(posedge clk_sys) begin
 				'h30, 'h97: inj_meminit_data <= inj_end[15:8];
 
 				// BUFFPT/TXTPTR bank 
-				'h98, 'h9B: inj_meminit_data <= model ? 8'd1 : 8'd0;
+				'h98, 'h9B: inj_meminit_data <= model_active ? 8'd1 : 8'd0;
 
 				default: begin
 					ioctl_req_wr <= 0;
@@ -693,7 +975,7 @@ always @(posedge clk_sys) begin
 		erase_to <= 0;
 		erasing <= force_erase;
 		if (force_erase == 2)
-			ioctl_load_addr <= model ? 25'h01_0000 : 25'h00_0000;
+			ioctl_load_addr <= model_active ? 25'h01_0000 : 25'h00_0000;
 		else
 			ioctl_load_addr <= 25'h0F_0000;
 	end
@@ -702,10 +984,10 @@ always @(posedge clk_sys) begin
 		erase_to <= erase_to + 1'b1;
 		if (&erase_to) begin
 			ioctl_req_wr <= 1;
-			if ((ramsize == 0 && model == 0 && ioctl_load_addr == 'h01_FFFF) // 128k P
-			  ||(ramsize == 0 && model == 1 && ioctl_load_addr == 'h02_FFFF) // 128k B
-			  ||(ramsize == 1 && model == 0 && ioctl_load_addr == 'h03_FFFF) // 256k P
-			  ||(ramsize == 1 && model == 1 && ioctl_load_addr == 'h04_FFFF) // 256k B
+			if ((ramsize == 0 && model_active == 0 && ioctl_load_addr == 'h01_FFFF) // 128k P
+			  ||(ramsize == 0 && model_active == 1 && ioctl_load_addr == 'h02_FFFF) // 128k B
+			  ||(ramsize == 1 && model_active == 0 && ioctl_load_addr == 'h03_FFFF) // 256k P
+			  ||(ramsize == 1 && model_active == 1 && ioctl_load_addr == 'h04_FFFF) // 256k B
 			) begin
 				ioctl_load_addr <= 'h0F_0000;
 			end
@@ -817,16 +1099,16 @@ st_ieee_bus ieee_bus_dc;
 cbm2_main main (
 	.CLK(CLK),
 
-	.model(model),
+	.model(model_active),
 	.profile(profile),
-	.ntsc(ntsc),
+	.ntsc(ntsc_active),
 	.newVic(newVic),
 	.cpu2MHz(cpu2MHz),
 	.ramSize(ramsize),
 	.extbankrom(extbankrom),
 	.extbankram(status[41:38]),
 
-	.pause(freeze),
+	.pause(freeze & ~transition_active),
 	.pause_out(pause),
 
 	.clk_sys(clk_sys),
@@ -967,11 +1249,12 @@ wire vblank_vic;
 video_sync_vic sync_vic
 (
 	.clk32(clk_sys),
-	.pause(pause | model),
+	.reset(video_path_reset_sys),
+	.pause(pause | model_active),
 	.hsync(hsync),
 	.vsync(vsync),
-	.ntsc(ntsc & newVic),
-	.ntscOld(ntsc & ~newVic),
+	.ntsc(ntsc_active & newVic),
+	.ntscOld(ntsc_active & ~newVic),
 	.wide(wide),
 	.hsync_out(hsync_vic),
 	.vsync_out(vsync_vic),
@@ -987,6 +1270,7 @@ wire vblank_crtc;
 video_sync_crtc sync_crtc
 (
 	.clk(clk_sys),
+	.reset(video_path_reset_sys),
 	.hsync(hsync),
 	.vsync(vsync),
 	.hblank(hblank),
@@ -997,10 +1281,10 @@ video_sync_crtc sync_crtc
 	.vblank_out(vblank_crtc)
 );
 
-wire vsync_out  = model ? vsync_crtc  : vsync_vic;
-wire hsync_out  = model ? hsync_crtc  : hsync_vic;
-wire vblank_out = model ? vblank_crtc : vblank_vic;
-wire hblank_out = model ? hblank_crtc : hblank_vic;
+wire vsync_out  = model_active ? vsync_crtc  : vsync_vic;
+wire hsync_out  = model_active ? hsync_crtc  : hsync_vic;
+wire vblank_out = model_active ? vblank_crtc : vblank_vic;
+wire hblank_out = model_active ? hblank_crtc : hblank_vic;
 
 reg hq2x320, hq2x160;
 reg ce_pix;
@@ -1009,20 +1293,30 @@ always @(posedge CLK_VIDEO) begin
 	reg [1:0] div;
 	reg [1:0] lores;
 
-	vsync_r <= {vsync_r[0], vsync};
-	if (vsync_r == 'b01) begin
-		hq2x320 <= (status[20:18] == 1) || !model;
-		hq2x160 <= (status[20:18] == 2);
-		div <= 2'd2;
+	if (video_path_reset_vid) begin
+		vsync_r <= 0;
+		div <= 0;
 		lores <= 0;
+		hq2x320 <= 0;
+		hq2x160 <= 0;
+		ce_pix <= 0;
 	end
-	else
-		div <= div + 1'd1;
+	else begin
+		vsync_r <= {vsync_r[0], vsync};
+		if (vsync_r == 'b01) begin
+			hq2x320 <= (status[20:18] == 1) || !model_active;
+			hq2x160 <= (status[20:18] == 2);
+			div <= 2'd2;
+			lores <= 0;
+		end
+		else
+			div <= div + 1'd1;
 
-	if (&div) 
-		lores <= lores + 1'd1;
+		if (&div)
+			lores <= lores + 1'd1;
 
-	ce_pix <= (~|lores | ~hq2x160) && (~lores[0] | ~hq2x320) && !div;
+		ce_pix <= (~|lores | ~hq2x160) && (~lores[0] | ~hq2x320) && !div;
+	end
 end
 
 wire scandoubler = status[20:18] || forced_scandoubler;
@@ -1062,7 +1356,7 @@ reg wide;
 always @(posedge CLK_VIDEO) begin
 	vcrop <= 0;
 	wide <= 0;
-	if (!model) begin
+	if (!model_active) begin
 		if(HDMI_WIDTH >= (HDMI_HEIGHT + HDMI_HEIGHT[11:1]) && !scandoubler) begin
 			if(HDMI_HEIGHT == 480)  vcrop <= 10'd240;
 			if(HDMI_HEIGHT == 600)  begin vcrop <= 10'd200; wide <= vcrop_en; end
@@ -1103,7 +1397,7 @@ always @(posedge clk_sys) begin
 	if(old_sync ^ freeze_sync) freeze <= (OSD_STATUS & status[15]) | prg_freeze;
 end
 
-assign HDMI_FREEZE = freeze;
+assign HDMI_FREEZE = freeze | transition_freeze | emergency_pll_freeze;
 assign HDMI_BLACKOUT = 0;
 assign HDMI_BOB_DEINT = 0;
 
