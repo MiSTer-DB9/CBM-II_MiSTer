@@ -309,7 +309,7 @@ pll_cfg pll_cfg
 	.mgmt_clk(CLK_50M),
 	.mgmt_reset(pll_cfg_reset),
 	.mgmt_waitrequest(cfg_waitrequest),
-	.mgmt_read(0),
+	.mgmt_read(1'b0),
 	.mgmt_readdata(),
 	.mgmt_write(cfg_write),
 	.mgmt_address(cfg_address),
@@ -1105,6 +1105,7 @@ cbm2_main main (
 	.newVic(newVic),
 	.cpu2MHz(cpu2MHz),
 	.ramSize(ramsize),
+	.copro(2'b00),
 	.extbankrom(extbankrom),
 	.extbankram(status[41:38]),
 
@@ -1127,6 +1128,9 @@ cbm2_main main (
 	.pot4(pd34_mode[1] ? paddle_4 : pd34_mode[0] ? mouse_y : {8{joyB_cbm[6]}}),
 
 	.sid_ld_clk(clk_sys),
+	.sid_ld_addr(12'd0),
+	.sid_ld_data(16'd0),
+	.sid_ld_wr(1'b0),
 	.sid_cfg(status[27:26]),
 	.sid_fc_off(status[28] ? (13'h600 - {status[31:29],7'd0}) : 13'd0),
 
@@ -1212,12 +1216,13 @@ ieee_drive #(.DRIVES(NDRIVES)) ieee_drive
 
 	.img_mounted(img_mounted),
 	.img_readonly(img_readonly),
-	.img_size(img_size)
+	.img_size(img_size),
 
-	// .rom_wr((load_drv_4040 || load_drv_8250) && ioctl_download && ioctl_wr && !ioctl_addr[24:15]),
-	// .rom_sel(load_drv_4040),
-	// .rom_addr(ioctl_addr[14:0]),
-	// .rom_data(ioctl_data)
+	// Runtime drive-ROM loading is intentionally disabled.
+	.rom_wr(1'b0),
+	.rom_sel(1'b0),
+	.rom_addr(15'd0),
+	.rom_data(8'd0)
 );
 
 // ========================================================================
@@ -1340,12 +1345,15 @@ video_cleaner video_cleaner
 	.HBlank(hblank_out),
 	.VBlank(vblank_out),
 	.DE_in(vga_de),
+	.interlace(1'b0),
+	.f1(1'b0),
 
 	.VGA_R(rc),
 	.VGA_G(gc),
 	.VGA_B(bc),
 	.VGA_VS(vsc),
 	.VGA_HS(hsc),
+	.VGA_DE(),
 	.HBlank_out(hblc),
 	.VBlank_out(vblc),
 	.DE_out(vdec)

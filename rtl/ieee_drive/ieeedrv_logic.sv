@@ -95,15 +95,30 @@ wire        un1_rw;
 T65 un1
 (
 	.MODE(2'b00),
+	.BCD_en(1'b1),
 	.RES_n(~reset),
 	.ENABLE(ph2_f_dos),
 	.CLK(clk_sys),
+	.Rdy(1'b1),
+	.Abort_n(1'b1),
 	.IRQ_n(ue1_irq),
+	.NMI_n(1'b1),
 	.SO_n(~reset),
 	.R_W_n(un1_rw),
+	.Sync(),
+	.EF(),
+	.MF(),
+	.XF(),
+	.ML_n(),
+	.VP_n(),
+	.VDA(),
+	.VPA(),
 	.A(un1_a),
 	.DI(un1_di),
-	.DO(un1_do)
+	.DO(un1_do),
+	.Regs(),
+	.DEBUG(),
+	.NMI_ack()
 );
 
 // ====================================================================
@@ -125,7 +140,9 @@ M6532 uf1
 	.RW_n(un1_rw),
 	.d_in(un1_di),
 	.d_out(uf1_data),
+	.IOS_n(1'b1),
 	.RS_n(un1_a[9]),
+	.IRQ_n(),
 	.CS1(uf1_cs),
 	.CS2_n(1'b0),
 
@@ -133,7 +150,8 @@ M6532 uf1
 	.PA_out(uf1_pao),
 
 	.PB_in(uf1_pbo),
-	.PB_out(uf1_pbo)
+	.PB_out(uf1_pbo),
+	.oe()
 );
 
 // ====================================================================
@@ -184,6 +202,7 @@ M6532 ue1
 	.RW_n(un1_rw),
 	.d_in(un1_di),
 	.d_out(ue1_data),
+	.IOS_n(1'b1),
 	.RS_n(un1_a[9]),
 	.IRQ_n(ue1_irq),
 	.CS1(ue1_cs),
@@ -193,7 +212,8 @@ M6532 ue1
 	.PA_out(ue1_pao),
 
 	.PB_in(ue1_pbo & {rdfi, daci, 3'b111, dev_id}),
-	.PB_out(ue1_pbo)
+	.PB_out(ue1_pbo),
+	.oe()
 );
 
 // ====================================================================
@@ -220,15 +240,30 @@ wire        uc3_rw;
 T65 uc3
 (
 	.MODE(2'b00),
+	.BCD_en(1'b1),
 	.RES_n(~reset),
 	.ENABLE(ph2_r_ctl),
 	.CLK(clk_sys),
+	.Rdy(1'b1),
+	.Abort_n(1'b1),
 	.IRQ_n(uc5_irq),
+	.NMI_n(1'b1),
 	.SO_n(drv_brdy_n | drv_type[1]),
 	.R_W_n(uc3_rw),
+	.Sync(),
+	.EF(),
+	.MF(),
+	.XF(),
+	.ML_n(),
+	.VP_n(),
+	.VDA(),
+	.VPA(),
 	.A(uc3_a),
 	.DI(uc3_di),
-	.DO(uc3_do)
+	.DO(uc3_do),
+	.Regs(),
+	.DEBUG(),
+	.NMI_ack()
 );
 
 // ====================================================================
@@ -259,6 +294,7 @@ M6532 #(.RRIOT(1)) uc5
 	.d_out(uc5_data),
 	.RS_n(uc3_a[7]),
 	.IOS_n(~uc3_a[7]),
+	.IRQ_n(),
 	.CS1(uc5_cs),
 	.CS2_n(1'b0),
 
@@ -266,7 +302,8 @@ M6532 #(.RRIOT(1)) uc5
 	.PA_out(drv_dat_o),
 
 	.PB_in({1'b1, drv_type[1] ? drv_sync_i : ~drv_type[0], 2'b11, wps[drv_sel], 3'b111} & uc5_pbo),
-	.PB_out(uc5_pbo)
+	.PB_out(uc5_pbo),
+	.oe()
 );
 
 generate
@@ -295,7 +332,6 @@ endgenerate
 
 wire [7:0] ud5_data;
 
-wire [7:0] ud5_pa_o;
 wire [7:0] ud5_pb_o;
 
 assign     drv_pllsyn = ud5_pb_o[6] & ~drv_type[1];
@@ -316,7 +352,9 @@ via6522 ud5
 	.strobe(ph2_r_ctl & ud5_cs),
 	.we(~uc3_rw),
 
-	.porta_out(ud5_pa_o),
+	.irq(),
+
+	.porta_out(),
 	.porta_in(drv_dat_i),
 
 	.portb_out(ud5_pb_o),

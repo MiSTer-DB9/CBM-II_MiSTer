@@ -45,8 +45,8 @@ module cbm2_main (
    input        [1:0] sid_cfg,
    input       [12:0] sid_fc_off,
    input              sid_ld_clk,
-   input              sid_ld_addr,
-   input              sid_ld_data,
+   input       [11:0] sid_ld_addr,
+   input       [15:0] sid_ld_data,
    input              sid_ld_wr,
 
    input  st_ieee_bus ieee_i,
@@ -182,11 +182,13 @@ wire irq_n = irq_tpi1 & irq_vic;
 wire rdy   = vicrdy & refrdy;
 
 cpu_6509 cpu (
-   .widePO(0),
+   .widePO(1'b0),
    .clk(clk_sys),
    .enable(enableCpu),
    .reset(reset),
 
+   .nmi_n(1'b1),
+   .nmi_ack(),
    .irq_n(irq_n),
    .rdy(rdy),
 
@@ -254,16 +256,18 @@ video_vicii_656x #(
    .enaData(enableVic & ~model),
    .phi(phase),
 
-   .baSync(0),
+   .baSync(1'b0),
    .ba(baLoc),
+   .ba_dma(),
 
    .mode6569(~ntsc),
    .mode6567old(ntsc & ~newVic),
    .mode6567R8(ntsc & newVic),
-   .mode6572(0),
+   .mode6572(1'b0),
    .variant(2'b00),
 
-   .turbo_en(0),
+   .turbo_en(1'b0),
+   .turbo_state(),
 
    .cs(cs_vic),
    .we(cpuWe),
@@ -281,7 +285,11 @@ video_vicii_656x #(
 
    .hsync(vicHSync),
    .vsync(vicVSync),
-   .colorIndex(vicColorIndex)
+   .colorIndex(vicColorIndex),
+
+   .debugX(),
+   .debugY(),
+   .vicRefresh()
 );
 
 fpga64_rgbcolor vic_colors (
@@ -323,7 +331,7 @@ mc6845 crtc (
    .VBLANK(crtcVblank),
    .HBLANK(crtcHblank),
    .DE(crtcDE),
-   .LPSTB(0),
+   .LPSTB(1'b0),
    .CURSOR(crtcCursor),
 
    .MA(crtcMa),
@@ -335,12 +343,15 @@ rom_mem #(8,14) chargen
 (
    .clock_a(clk_sys),
    .address_a({profile, crtcMa[12], crtcGraphics, vidDi[6:0], crtcRa[3:0]}),
+   .data_a(8'd0),
+   .wren_a(1'b0),
    .q_a(crtcDotD),
 
    .clock_b(clk_sys),
    .address_b(chrgen_addr),
    .data_b(chrgen_data),
-   .wren_b(chrgen_wr)
+   .wren_b(chrgen_wr),
+   .q_b()
 );
 
 reg crtcOut;
@@ -422,6 +433,11 @@ sid_top #(
    .audio_l(audio),
 
    .ext_in_l(18'd0),
+   .fc_offset_r(13'd0),
+   .pot_x_r(8'd0),
+   .pot_y_r(8'd0),
+   .ext_in_r(18'd0),
+   .audio_r(),
    .filter_en(1'b1),
    .mode(1'b0),
    .cfg(sid_cfg),
@@ -549,13 +565,18 @@ mos6526 cia (
 
    .pa_in(cia_pao & joy_trig & (ieee_i.data | {8{ieee_talken}})),
    .pa_out(cia_pao),
+   .pa_oe(),
 
    .pb_in(cia_pbo & joy_dir),
    .pb_out(cia_pbo),
+   .pb_oe(),
 
    .flag_n(iec_data_i),
+   .pc_n(),
    .sp_in('1),
+   .sp_out(),
    .cnt_in('1),
+   .cnt_out(),
 
    .tod(todclk),
    .irq_n(irq_cia)
@@ -578,7 +599,17 @@ glb6551 acia (
    .RW_N(~cpuWe),
    .RS(cpuAddr[1:0]),
 
-   .IRQ(irq_acia)
+   .IRQ(irq_acia),
+   .RX_CLK(),
+   .RX_CLK_IN(1'b0),
+   .XTAL_CLK_IN(1'b0),
+   .TXDATA_OUT(),
+   .RXDATA_IN(1'b1),
+   .RTS(),
+   .CTS(1'b0),
+   .DCD(1'b0),
+   .DTR(),
+   .DSR(1'b0)
 );
 
 // ============================================================================
@@ -669,6 +700,7 @@ mos_tpi tpi1 (
       2'b11
    }),
    .pa_out(tpi1_pao),
+   .pa_oe(),
 
    .pb_in(tpi1_pbo & {
       iec_clk_i,
@@ -679,6 +711,7 @@ mos_tpi tpi1 (
       ~ieee_dirctl | ieee_i.ifc
    }),
    .pb_out(tpi1_pbo),
+   .pb_oe(),
 
    .pc_in(tpi1_pco & {
       3'b111,
@@ -688,7 +721,8 @@ mos_tpi tpi1 (
       (ieee_dirctl | ieee_i.srq) & tpi1_pbo[1],
       todclk
    }),
-   .pc_out(tpi1_pco)
+   .pc_out(tpi1_pco),
+   .pc_oe()
 );
 
 // ============================================================================
@@ -743,12 +777,15 @@ mos_tpi tpi2 (
 
    .pa_in(tpi2_pao),
    .pa_out(tpi2_pao),
+   .pa_oe(),
 
    .pb_in(tpi2_pbo),
    .pb_out(tpi2_pbo),
+   .pb_oe(),
 
    .pc_in(tpi2_pco & {(~model | profile), (~model | ntsc), tpi2_pci}),
-   .pc_out(tpi2_pco)
+   .pc_out(tpi2_pco),
+   .pc_oe()
 );
 
 // ============================================================================

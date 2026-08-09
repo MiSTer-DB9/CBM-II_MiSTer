@@ -153,6 +153,7 @@ ieeedrv_logic #(
 	.drv_error(drv_error),
 	.drv_ready(drv_ready),
 	.drv_brdy_n(drv_brdy_n),
+	.drv_pllsyn(),
 
 	.drv_dat_i(drv_dat_i),
 	.drv_sync_i(drv_sync_i),
