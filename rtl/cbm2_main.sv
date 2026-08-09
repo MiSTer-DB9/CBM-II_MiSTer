@@ -80,7 +80,7 @@ module cbm2_main (
    output             sftlk_sense,
 
    input              erase_colram,
-   input       [12:0] erase_colram_addr,
+   input        [9:0] erase_colram_addr,
 
    input              chrgen_wr,
    input       [13:0] chrgen_addr,
@@ -796,6 +796,9 @@ cbm2_buslogic buslogic (
 
    .clk_sys(clk_sys),
    .reset(reset),
+
+   .erase_colram(erase_colram),
+   .erase_colram_addr(erase_colram_addr),
 
    .phase(phase),
 

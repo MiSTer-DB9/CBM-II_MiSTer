@@ -79,8 +79,8 @@ wire [3:0] colData;
 sram #(4,10) colorram (
    .clock_a(clk_sys),
    .wren_a   (erase_colram | (systemWe & cs_colram)),
-   .address_a(erase_colram ? erase_colram_addr : systemAddr),
-   .data_a   (erase_colram ? {4{erase_colram_addr[6]}} : cpuDo),
+   .address_a(erase_colram ? erase_colram_addr : systemAddr[9:0]),
+   .data_a   (erase_colram ? {4{erase_colram_addr[6]}} : cpuDo[3:0]),
    .q_a(colData)
 );
 
