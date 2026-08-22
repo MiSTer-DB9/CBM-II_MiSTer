@@ -114,6 +114,42 @@ defparam
 
 endmodule
 
+module ieeedrv_rom_ro #(
+	parameter DATAWIDTH,
+	parameter ADDRWIDTH,
+	parameter NUMWORDS,
+	parameter INITFILE="UNUSED"
+)(
+	input	                     clock,
+	input	     [ADDRWIDTH-1:0] address,
+	output reg [DATAWIDTH-1:0] q
+);
+
+altsyncram altsyncram_component (
+	.clock0 (clock),
+	.address_a (address),
+	.rden_a (1'b1),
+	.q_a (q)
+);
+
+defparam
+	altsyncram_component.byte_size = DATAWIDTH,
+	altsyncram_component.intended_device_family = "Cyclone V",
+	altsyncram_component.lpm_hint = "ENABLE_RUNTIME_MOD=NO",
+	altsyncram_component.lpm_type = "altsyncram",
+	altsyncram_component.init_file = INITFILE,
+	altsyncram_component.operation_mode = "ROM",
+	altsyncram_component.power_up_uninitialized = "FALSE",
+	altsyncram_component.clock_enable_input_a = "BYPASS",
+	altsyncram_component.clock_enable_output_a = "BYPASS",
+	altsyncram_component.outdata_reg_a = "CLOCK0",
+	altsyncram_component.outdata_aclr_a = "NONE",
+	altsyncram_component.widthad_a = ADDRWIDTH,
+	altsyncram_component.width_a = DATAWIDTH,
+	altsyncram_component.numwords_a = NUMWORDS;
+
+endmodule
+
 module ieeedrv_mem #(
 	parameter DATAWIDTH,
 	parameter ADDRWIDTH

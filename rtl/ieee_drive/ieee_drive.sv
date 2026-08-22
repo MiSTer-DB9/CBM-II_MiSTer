@@ -139,34 +139,18 @@ wire  [7:0] dos_data[NDR], dos4040_data, dos8250_data;
 wire  [1:0] dos_select;
 wire [13:0] dos_rom_addr;
 
-ieeedrv_rom #(8,14,16384,"rtl/ieee_drive/roms/c4040_dos.mif") c4040_dos_rom
+ieeedrv_rom_ro #(8,14,16384,"rtl/ieee_drive/roms/c4040_dos.mif") c4040_dos_rom
 (
-	.clock_a(clk_sys),
-	.address_a(dos_rom_addr),
-	.data_a(8'd0),
-	.wren_a(1'b0),
-	.q_a(dos4040_data),
-
-	.clock_b(clk_sys),
-	.wren_b(rom_wr && rom_sel && !rom_addr[14]),
-	.address_b(rom_addr[13:0]),
-	.data_b(rom_data),
-	.q_b()
+	.clock(clk_sys),
+	.address(dos_rom_addr),
+	.q(dos4040_data)
 );
 
-ieeedrv_rom #(8,14,16384,"rtl/ieee_drive/roms/c8250_dos.mif") c8250_dos_rom
+ieeedrv_rom_ro #(8,14,16384,"rtl/ieee_drive/roms/c8250_dos.mif") c8250_dos_rom
 (
-	.clock_a(clk_sys),
-	.address_a(dos_rom_addr),
-	.data_a(8'd0),
-	.wren_a(1'b0),
-	.q_a(dos8250_data),
-
-	.clock_b(clk_sys),
-	.wren_b(rom_wr && !rom_sel && !rom_addr[14]),
-	.address_b(rom_addr[13:0]),
-	.data_b(rom_data),
-	.q_b()
+	.clock(clk_sys),
+	.address(dos_rom_addr),
+	.q(dos8250_data)
 );
 
 ieee_rommux #(NDR,14) dos_rom_mux (
@@ -198,34 +182,18 @@ wire  [7:0] ctl_data[NDR], ctl4040_data, ctl8250_data;
 wire  [1:0] ctl_select;
 wire [10:0] ctl_rom_addr;
 
-ieeedrv_rom #(8,11,2048,"rtl/ieee_drive/roms/c4040_ctl.mif") c4040_controller_rom
+ieeedrv_rom_ro #(8,11,2048,"rtl/ieee_drive/roms/c4040_ctl.mif") c4040_controller_rom
 (
-	.clock_a(clk_sys),
-	.address_a(ctl_rom_addr),
-	.data_a(8'd0),
-	.wren_a(1'b0),
-	.q_a(ctl4040_data),
-
-	.clock_b(clk_sys),
-	.wren_b(rom_wr && rom_sel && rom_addr[14:11] == 'b1000),
-	.address_b(rom_addr[10:0]),
-	.data_b(rom_data),
-	.q_b()
+	.clock(clk_sys),
+	.address(ctl_rom_addr),
+	.q(ctl4040_data)
 );
 
-ieeedrv_rom #(8,11,2048,"rtl/ieee_drive/roms/c8250_ctl.mif") c8250_controller_rom
+ieeedrv_rom_ro #(8,11,2048,"rtl/ieee_drive/roms/c8250_ctl.mif") c8250_controller_rom
 (
-	.clock_a(clk_sys),
-	.address_a(ctl_rom_addr),
-	.data_a(8'd0),
-	.wren_a(1'b0),
-	.q_a(ctl8250_data),
-
-	.clock_b(clk_sys),
-	.wren_b(rom_wr && !rom_sel && rom_addr[14:11] == 'b1000),
-	.address_b(rom_addr[10:0]),
-	.data_b(rom_data),
-	.q_b()
+	.clock(clk_sys),
+	.address(ctl_rom_addr),
+	.q(ctl8250_data)
 );
 
 ieee_rommux #(NDR,11) controller_rom_mux (
