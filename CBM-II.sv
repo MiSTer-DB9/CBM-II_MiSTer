@@ -837,6 +837,21 @@ reg        chrgen_wr;
 reg  [2:0] extbankrom = 0;
 reg        prg_freeze;
 
+localparam [2:0] PRG_LINK_LO_READ  = 3'd0,
+                 PRG_LINK_HI_READ  = 3'd1,
+                 PRG_BODY_READ     = 3'd2,
+                 PRG_LINK_LO_WRITE = 3'd3,
+                 PRG_LINK_HI_WRITE = 3'd4;
+
+reg        prg_relink = 0;
+reg        prg_relink_validate = 0;
+reg        prg_relink_wait = 0;
+reg  [2:0] prg_relink_state;
+reg [24:0] prg_relink_line_addr;
+reg [24:0] prg_relink_mem_addr;
+reg [24:0] prg_relink_next_addr;
+reg  [7:0] prg_relink_link_lo;
+
 always @(posedge clk_sys) begin
 	reg  [4:0] erase_to;
 	reg        old_download;
@@ -849,24 +864,128 @@ always @(posedge clk_sys) begin
 	chrgen_wr <= 0;
 
 	if (~io_cycle & io_cycleD) begin
-		io_cycle_ce <= 1;
+		io_cycle_ce <= 0;
 		io_cycle_we <= 0;
-		if (ioctl_req_wr && ((!load_prg && !inj_meminit) || freeze)) begin
-			ioctl_req_wr <= 0;
-			io_cycle_we <= 1;
-			io_cycle_addr <= ioctl_load_addr;
-			ioctl_load_addr <= ioctl_load_addr + 1'b1;
+		if (prg_relink) begin
+			if (!prg_relink_wait) begin
+				io_cycle_ce <= 1;
+				io_cycle_addr <= prg_relink_mem_addr;
+				if (prg_relink_state == PRG_LINK_LO_WRITE) begin
+					io_cycle_we <= 1;
+					io_cycle_data <= prg_relink_next_addr[7:0];
+				end
+				else if (prg_relink_state == PRG_LINK_HI_WRITE) begin
+					io_cycle_we <= 1;
+					io_cycle_data <= prg_relink_next_addr[15:8];
+				end
+			end
+		end
+		else begin
+			io_cycle_ce <= 1;
+			if (ioctl_req_wr && ((!load_prg && !inj_meminit) || freeze)) begin
+				ioctl_req_wr <= 0;
+				io_cycle_we <= 1;
+				io_cycle_addr <= ioctl_load_addr;
+				ioctl_load_addr <= ioctl_load_addr + 1'b1;
 
-			if (erasing)
-				io_cycle_data <= {8{ioctl_load_addr[14]^ioctl_load_addr[3]^ioctl_load_addr[2]}};
-			else if (inj_meminit)
-				io_cycle_data <= inj_meminit_data;
-			else
-				io_cycle_data <= ioctl_data;
+				if (erasing)
+					io_cycle_data <= {8{ioctl_load_addr[14]^ioctl_load_addr[3]^ioctl_load_addr[2]}};
+				else if (inj_meminit)
+					io_cycle_data <= inj_meminit_data;
+				else
+					io_cycle_data <= ioctl_data;
+			end
 		end
 	end
 
-	if (io_cycle & ~io_cycleD) io_cycle_ce <= 0;
+	if (io_cycle & ~io_cycleD) begin
+		io_cycle_ce <= 0;
+
+		if (prg_relink && !prg_relink_wait) begin
+			// The SDRAM request starts on this edge. Its result is consumed
+			// after a complete I/O slot, once the controller has finished it.
+			prg_relink_wait <= 1;
+		end
+		else if (prg_relink) begin
+			prg_relink_wait <= 0;
+			case (prg_relink_state)
+				PRG_LINK_LO_READ: begin
+					prg_relink_link_lo <= sdram_data;
+					prg_relink_mem_addr <= prg_relink_line_addr + 1'b1;
+					prg_relink_state <= PRG_LINK_HI_READ;
+				end
+
+				PRG_LINK_HI_READ: begin
+					if ({sdram_data, prg_relink_link_lo} == 0) begin
+						if (prg_relink_validate) begin
+							prg_relink_validate <= 0;
+							prg_relink_line_addr <= {model_active ? 9'd1 : 9'd0, inj_start};
+							prg_relink_mem_addr <= {model_active ? 9'd1 : 9'd0, inj_start};
+							prg_relink_state <= PRG_LINK_LO_READ;
+						end
+						else begin
+							// LNKPRG leaves the end pointer just after the null link.
+							inj_end <= prg_relink_line_addr[15:0] + 2'd2;
+							prg_relink <= 0;
+							inj_meminit <= 1;
+							ioctl_load_addr <= 25'h00F_0000;
+						end
+					end
+					else if (prg_relink_line_addr + 3'd4 >= {model_active ? 9'd1 : 9'd0, inj_end}) begin
+						// Not a complete tokenized BASIC line. Leave it unchanged.
+						prg_relink <= 0;
+						inj_meminit <= 1;
+						ioctl_load_addr <= 25'h00F_0000;
+					end
+					else begin
+						prg_relink_mem_addr <= prg_relink_line_addr + 3'd4;
+						prg_relink_state <= PRG_BODY_READ;
+					end
+				end
+
+				PRG_BODY_READ: begin
+					if (sdram_data == 0) begin
+						prg_relink_next_addr <= prg_relink_mem_addr + 1'b1;
+						if (prg_relink_mem_addr + 3'd3 > {model_active ? 9'd1 : 9'd0, inj_end}) begin
+							// There is no room for the next line's two-byte link.
+							prg_relink <= 0;
+							inj_meminit <= 1;
+							ioctl_load_addr <= 25'h00F_0000;
+						end
+						else if (prg_relink_validate) begin
+							prg_relink_line_addr <= prg_relink_mem_addr + 1'b1;
+							prg_relink_mem_addr <= prg_relink_mem_addr + 1'b1;
+							prg_relink_state <= PRG_LINK_LO_READ;
+						end
+						else begin
+							prg_relink_mem_addr <= prg_relink_line_addr;
+							prg_relink_state <= PRG_LINK_LO_WRITE;
+						end
+					end
+					else if (prg_relink_mem_addr + 1'b1 >= {model_active ? 9'd1 : 9'd0, inj_end}) begin
+						// No line terminator was found inside the loaded file.
+						prg_relink <= 0;
+						inj_meminit <= 1;
+						ioctl_load_addr <= 25'h00F_0000;
+					end
+					else begin
+						prg_relink_mem_addr <= prg_relink_mem_addr + 1'b1;
+					end
+				end
+
+				PRG_LINK_LO_WRITE: begin
+					prg_relink_mem_addr <= prg_relink_line_addr + 1'b1;
+					prg_relink_state <= PRG_LINK_HI_WRITE;
+				end
+
+				PRG_LINK_HI_WRITE: begin
+					prg_relink_line_addr <= prg_relink_next_addr;
+					prg_relink_mem_addr <= prg_relink_next_addr;
+					prg_relink_state <= PRG_LINK_LO_READ;
+				end
+			endcase
+		end
+	end
 
 	if (ioctl_wr && !erasing && !force_erase) begin
 		if (load_rom_2000) begin
@@ -938,8 +1057,18 @@ always @(posedge clk_sys) begin
 
 	// meminit for RAM injection
 	if (old_download && !ioctl_download && load_prg && !inj_meminit) begin
-		inj_meminit <= 1;
-		ioctl_load_addr <= 25'h00F_0000;
+		if (!status[24] && inj_end >= inj_start + 2'd2) begin
+			prg_relink <= 1;
+			prg_relink_validate <= 1;
+			prg_relink_wait <= 0;
+			prg_relink_state <= PRG_LINK_LO_READ;
+			prg_relink_line_addr <= {model_active ? 9'd1 : 9'd0, inj_start};
+			prg_relink_mem_addr <= {model_active ? 9'd1 : 9'd0, inj_start};
+		end
+		else begin
+			inj_meminit <= 1;
+			ioctl_load_addr <= 25'h00F_0000;
+		end
 	end
 
 	if (inj_meminit && !ioctl_req_wr) begin
