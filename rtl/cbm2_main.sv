@@ -318,6 +318,7 @@ reg        crtcCursor;
 mc6845 crtc (
    .CLOCK(clk_sys),
    .CLKEN(enableCrtc),
+   .CLKEN_CPU(enableIO_p),
    .nRESET(~reset & model),
 
    .ENABLE(enableIO_p),
@@ -334,8 +335,11 @@ mc6845 crtc (
    .LPSTB(1'b0),
    .CURSOR(crtcCursor),
 
+   .VGA(1'b0),
+
    .MA(crtcMa),
-   .RA(crtcRa)
+   .RA(crtcRa),
+   .test()
 );
 
 reg [7:0] crtcDotD;
